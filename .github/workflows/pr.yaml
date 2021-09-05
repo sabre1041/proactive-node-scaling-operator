@@ -1,80 +1,221 @@
 name: pull request
-on: 
+on:
   pull_request:
     branches:
       - master
       - main
+
+env:
+  DEFAULT_BUNDLE_VERSION: "0.0.1"
+  DEFAULT_BUNDLE_CHANNEL: "alpha"
+  DEFAULT_OPERATOR_VERSION: "latest"
+  OPERATOR_SDK_VERSION: "v1.9.0"
+  BUILD_PLATFORMS: "linux/amd64,linux/arm64,linux/ppc64le"
+
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    name: setup
+    steps:
+      - name: Setting Workflow Variables
+        id: set-variables
+        run: |
+          echo "::set-output name=repository_name::$(basename $GITHUB_REPOSITORY)"
+          echo "::set-output name=bin_dir::${HOME}/bin"
+
+          # Create Distribution Matrix
+          echo "::set-output name=dist_matrix::$(echo -n "${{ env.BUILD_PLATFORMS }}" | jq -csR '. | split(",")')"
+
+      - name: Setting Image Variables
+        id: set-variables-image
+        run: |
+          if [ "${{ secrets.OPERATOR_IMAGE_REPOSITORY }}" == "" ]; then
+            echo "::set-output name=operator_image_repository_name::${{ steps.set-variables.outputs.repository_name }}"
+            echo "::set-output name=operator_image_registry::quay.io/${{ github.repository_owner }}"
+          else
+            OPERATOR_IMAGE_REPOSITORY="${{ secrets.OPERATOR_IMAGE_REPOSITORY }}"
+            echo "::set-output name=operator_image_repository_name::${OPERATOR_IMAGE_REPOSITORY##*/}"
+            echo "::set-output name=operator_image_registry::${OPERATOR_IMAGE_REPOSITORY%/*}"
+          fi
+
+          if [ "${{ secrets.BUNDLE_IMAGE_REPOSITORY }}" == "" ]; then
+            echo "::set-output name=bundle_image_repository_name::${{ steps.set-variables.outputs.repository_name }}-bundle"
+            echo "::set-output name=bundle_image_registry::quay.io/${{ github.repository_owner }}"
+
+          else
+            BUNDLE_IMAGE_REPOSITORY="${{ secrets.BUNDLE_IMAGE_REPOSITORY }}"
+            echo "::set-output name=bundle_image_repository_name::${BUNDLE_IMAGE_REPOSITORY##*/}"
+            echo "::set-output name=bundle_image_registry::${BUNDLE_IMAGE_REPOSITORY%/*}"
+          fi
+
+      - name: Build Go Cache Paths
+        id: go-cache-paths
+        run: |
+          echo "::set-output name=go-build::$(go env GOCACHE)"
+          echo "::set-output name=go-mod::$(go env GOMODCACHE)"
+
+      - name: Download Binaries
+        run: |
+          # Create Binary Directory
+          mkdir -p ${{ steps.set-variables.outputs.bin_dir }}
+
+          # Operator SDK
+          curl -L -o ${{ steps.set-variables.outputs.bin_dir }}/operator-sdk https://github.com/operator-framework/operator-sdk/releases/download/${OPERATOR_SDK_VERSION}/operator-sdk_linux_amd64
+
+      - name: Upload Operator SDK Binaries
+        uses: actions/upload-artifact@v2
+        with:
+          name: operator-sdk-binaries
+          path: ${{ steps.set-variables.outputs.bin_dir }}
+    outputs:
+      repository_name: ${{ steps.set-variables.outputs.repository_name }}
+      bin_dir: ${{ steps.set-variables.outputs.bin_dir }}
+      operator_image_repository_name: ${{ steps.set-variables-image.outputs.operator_image_repository_name}}
+      operator_image_registry: ${{ steps.set-variables-image.outputs.operator_image_registry }}
+      bundle_image_repository_name: ${{ steps.set-variables-image.outputs.bundle_image_repository_name }}
+      bundle_image_registry: ${{ steps.set-variables-image.outputs.bundle_image_registry }}
+      go_build: ${{ steps.go-cache-paths.outputs.go-build }}
+      go_mod: ${{ steps.go-cache-paths.outputs.go-mod }}
+      dist_matrix: ${{ steps.set-variables.outputs.dist_matrix }}
+
   build:
     runs-on: ubuntu-latest
     name: build
+    needs: ["setup"]
+    strategy:
+      matrix:
+        platform: ${{ fromJson(needs.setup.outputs.dist_matrix) }}
+    env:
+      OPERATOR_IMAGE_REPOSITORY: "${{ needs.setup.outputs.operator_image_registry }}/${{ needs.setup.outputs.operator_image_repository_name }}"
+      BUNDLE_IMAGE_REPOSITORY: "${{ needs.setup.outputs.bundle_image_registry }}/${{ needs.setup.outputs.bundle_image_repository_name }}"
     steps:
+      - name: Download Operator SDK Binaries
+        uses: actions/download-artifact@v2
+        with:
+          name: operator-sdk-binaries
+          path: ${{ needs.setup.outputs.bin_dir }}
 
-    - name: set repo name
-      shell: bash
-      run: | 
-        echo "REPOSITORY_NAME=$(basename $GITHUB_REPOSITORY)" >> $GITHUB_ENV    
+      - name: Prepare Build Step
+        id: setup-build-step
+        run: |
+          # Setup Path
+          echo "${{ needs.setup.outputs.bin_dir }}" >> $GITHUB_PATH
 
-    - name: Set up Go 1.x
-      uses: actions/setup-go@v2
-      with:
-        go-version: ^1.16
-    - name: Check out code into the Go module directory
-      uses: actions/checkout@v2
+          # Make Binaries Executable
+          chmod +x ${{ needs.setup.outputs.bin_dir }}/*
 
-    # - uses: shivanshs9/setup-k8s-operator-sdk@v1
-    #   with:
-    #     version: "1.9.0" # The operator-sdk version to download (if necessary) and use.      
+          # Configure Platform Variables
+          echo "::set-output name=platform_os::$(echo ${{ matrix.platform }} |  cut -d/ -f1)"
+          echo "::set-output name=platform_arch::$(echo ${{ matrix.platform }} |  cut -d/ -f2)"
 
-    - name: Download operator sdk
-      shell: bash
-      env:
-        RELEASE_VERSION: v1.9.0
-      run: | 
-        curl -LO https://github.com/operator-framework/operator-sdk/releases/download/${RELEASE_VERSION}/operator-sdk_linux_amd64
-        chmod +x operator-sdk_linux_amd64
-        mkdir ${HOME}/bin
-        mv operator-sdk_linux_amd64 ${HOME}/bin/operator-sdk
-        echo "${HOME}/bin" >> $GITHUB_PATH 
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v1
+        with:
+          go-version: ^1.16
 
-    - name: build code
-      shell: bash
-      run:  make VERSION=latest
-      
-    - name: build bundle
-      shell: bash
-      run: make bundle IMG=quay.io/${{ github.repository_owner }}/$(basename $GITHUB_REPOSITORY):0.0.1 VERSION=0.0.1 DEFAULT_CHANNEL=alpha
+      - name: Check out code
+        uses: actions/checkout@v2
 
-    - name: verify bundle
-      shell: bash
-      run: operator-sdk bundle validate ./bundle --select-optional name=operatorhub
+      - name: Go Build Cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ needs.setup.outputs.go_build }}
+          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
 
-    - name: build chart
-      shell: bash
-      run: make helmchart VERSION=0.0.1 IMG=quay.io/${{ github.repository_owner }}/$(basename $GITHUB_REPOSITORY):0.0.1
+      - name: Go Mod Cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ needs.setup.outputs.go_mod }}
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
 
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v1
-      with:
-        platforms: all      
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v1  
+      - name: Download Dependencies
+        shell: bash
+        run: |
+          make generate
+          make fmt
+          make vet
 
-    - name: "Build Operator Image"
-      uses: docker/build-push-action@v2
-      with:
-        context: .
-        file: ./Dockerfile
-        platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x
-        push: false
-        tags: "quay.io/${{ github.repository_owner }}/${{ env.REPOSITORY_NAME }}:v0.0.1"
+      - name: Upload Workspace Binaries
+        uses: actions/upload-artifact@v2
+        if: ${{ steps.setup-build-step.outputs.platform_arch == 'amd64' }}
+        with:
+          name: workspace-binaries
+          path: bin
 
-    - name: "Build Bundle Image"
-      uses: docker/build-push-action@v2
-      with:
-        context: .
-        file: ./bundle.Dockerfile
-        platforms: linux/amd64,linux/arm64,linux/ppc64le
-        push: false
-        tags: "quay.io/${{ github.repository_owner }}/${{ env.REPOSITORY_NAME }}-bundle:0.0.1"       
+      - name: build code
+        shell: bash
+        env:
+          VERSION: latest
+          GOOS: ${{ steps.setup-build-step.outputs.platform_os }}
+          GOARCH: ${{ steps.setup-build-step.outputs.platform_arch }}
+        run: make
+
+      - name: build bundle
+        shell: bash
+        run: make bundle IMG=${{ env.OPERATOR_IMAGE_REPOSITORY }}:${{ env.DEFAULT_OPERATOR_VERSION }} VERSION=${{ env.DEFAULT_BUNDLE_VERSION }} DEFAULT_CHANNEL=${{ env.DEFAULT_BUNDLE_CHANNEL }}
+
+      - name: verify bundle
+        shell: bash
+        run: operator-sdk bundle validate ./bundle --select-optional name=operatorhub
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: "Build Operator Image"
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./ci.Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          tags: "${{ env.OPERATOR_IMAGE_REPOSITORY }}:${{ env.DEFAULT_OPERATOR_VERSION }}"
+
+      - name: "Build Bundle Image"
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./bundle.Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          tags: "${{ env.BUNDLE_IMAGE_REPOSITORY }}:${{ env.DEFAULT_BUNDLE_VERSION }}"
+
+  build-helm:
+    runs-on: ubuntu-latest
+    name: build-helm
+    needs: ["setup", "build"]
+    env:
+      OPERATOR_IMAGE_REPOSITORY: "${{ needs.setup.outputs.operator_image_registry }}/${{ needs.setup.outputs.operator_image_repository_name }}"
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Download Workspace Binaries
+        uses: actions/download-artifact@v2
+        with:
+          name: workspace-binaries
+          path: bin
+
+      - name: Prepare Build Step
+        id: setup-build-step
+        run: |
+          # Make Binaries Executable
+          chmod +x bin/*
+
+      - name: Go Build Cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ needs.setup.outputs.go_build }}
+          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
+
+      - name: Go Mod Cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ needs.setup.outputs.go_mod }}
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+
+      - name: build chart
+        shell: bash
+        run: make helmchart VERSION=${{ env.DEFAULT_BUNDLE_VERSION }} IMG=${{ env.OPERATOR_IMAGE_REPOSITORY }}:${{ env.DEFAULT_OPERATOR_VERSION }}
