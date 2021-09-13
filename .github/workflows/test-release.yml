@@ -145,7 +145,6 @@ jobs:
   operatorhub-release:
     runs-on: ubuntu-latest
     name: operatorhub-release
-    if: ${{ needs.setup.outputs.tag_event == 'true' }}
     needs: ["setup"]
     env:
       REPOSITORY_NAME: ${{ needs.setup.outputs.repository_name }}
