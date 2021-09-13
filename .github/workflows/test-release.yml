@@ -180,4 +180,4 @@ jobs:
         shell: bash
         run: |
           echo "Printing Pull Request Template"
-          echo ${{ steps.set-community-operators-parameters.outputs.pull-request-body }}
+          echo "${{ steps.set-community-operators-parameters.outputs.pull-request-body }}"
