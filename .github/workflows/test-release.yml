@@ -174,7 +174,7 @@ jobs:
           PR_REQUEST_BODY="${PR_REQUEST_BODY//'%'/'%25'}"
           PR_REQUEST_BODY="${PR_REQUEST_BODY//$'\n'/'%0A'}"
           PR_REQUEST_BODY="${PR_REQUEST_BODY//$'\r'/'%0D'}"
-          echo "::set-output name=pull-request-body::"$(PR_REQUEST_BODY)""
+          echo "::set-output name=pull-request-body::"$(echo PR_REQUEST_BODY)""
 
       - name: Log
         shell: bash
