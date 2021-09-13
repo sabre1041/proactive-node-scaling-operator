@@ -1,0 +1,179 @@
+name: push
+on:
+  push:
+    branches:
+      - test-release
+
+env:
+  DEFAULT_BUNDLE_VERSION: "0.0.1"
+  DEFAULT_BUNDLE_CHANNEL: "alpha"
+  DEFAULT_OPERATOR_VERSION: "latest"
+  OPERATOR_SDK_VERSION: "v1.9.0"
+  BUILD_PLATFORMS: "linux/amd64,linux/arm64,linux/ppc64le"
+  HELM_REPO_DIR: "./tmp/gh-pages"
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    name: setup
+    steps:
+      - name: Check if registry secrets are set
+        run: |
+          if [ "${{ secrets.REGISTRY_USERNAME }}" == "" ] || [ "${{ secrets.REGISTRY_PASSWORD }}" == "" ]; then
+            echo "Required Secrets 'REGISTRY_USERNAME' or 'REGISTRY_PASSWORD' are not set!"
+            exit 1
+          fi
+
+      - name: Check if community operators PAT secret is set
+        run: |
+          if [ "${{ secrets.COMMUNITY_OPERATOR_PAT }}" == "" ]; then
+            echo "Required Secret 'COMMUNITY_OPERATOR_PAT' is not set"
+            exit 1
+          fi
+
+      - name: Setting Workflow Variables
+        id: set-variables
+        run: |
+          echo "::set-output name=repository_name::$(basename $GITHUB_REPOSITORY)"
+          echo "::set-output name=bin_dir::$(pwd)/bin"
+
+          # Create Distribution Matrix
+          echo "::set-output name=dist_matrix::$(echo -n "${{ env.BUILD_PLATFORMS }}" | jq -csR '. | split(",")')"
+
+      - name: Setting Image Variables
+        id: set-variables-image
+        run: |
+          if [ "${{ secrets.OPERATOR_IMAGE_REPOSITORY }}" == "" ]; then
+            echo "::set-output name=operator_image_repository_name::${{ steps.set-variables.outputs.repository_name }}"
+            echo "::set-output name=operator_image_registry::quay.io/${{ github.repository_owner }}"
+          else
+            OPERATOR_IMAGE_REPOSITORY="${{ secrets.OPERATOR_IMAGE_REPOSITORY }}"
+            echo "::set-output name=operator_image_repository_name::${OPERATOR_IMAGE_REPOSITORY##*/}"
+            echo "::set-output name=operator_image_registry::${OPERATOR_IMAGE_REPOSITORY%/*}"
+          fi
+
+          if [ "${{ secrets.BUNDLE_IMAGE_REPOSITORY }}" == "" ]; then
+            echo "::set-output name=bundle_image_repository_name::${{ steps.set-variables.outputs.repository_name }}-bundle"
+            echo "::set-output name=bundle_image_registry::quay.io/${{ github.repository_owner }}"
+
+          else
+            BUNDLE_IMAGE_REPOSITORY="${{ secrets.BUNDLE_IMAGE_REPOSITORY }}"
+            echo "::set-output name=bundle_image_repository_name::${BUNDLE_IMAGE_REPOSITORY##*/}"
+            echo "::set-output name=bundle_image_registry::${BUNDLE_IMAGE_REPOSITORY%/*}"
+          fi
+
+          # Set versions based on presence of tag
+          if [[ "${{ github.ref }}" =~ ^refs/tags/ ]]; then
+            TAG="${GITHUB_REF/refs\/tags\//}"
+            echo "::set-output name=tag_event::true"
+            echo "::set-output name=operator_version::$TAG"
+            echo "::set-output name=bundle_version::${TAG:1}"
+          else
+            echo "::set-output name=tag_event::false"
+            echo "::set-output name=operator_version::$DEFAULT_OPERATOR_VERSION"
+            echo "::set-output name=bundle_version::$DEFAULT_BUNDLE_VERSION"
+          fi
+
+      - name: Verify Semver Release
+        if: ${{ steps.set-variables-image.outputs.tag_event == 'true' }}
+        uses: rubenesp87/semver-validation-action@0.0.6
+        with:
+          version: "${{ steps.set-variables-image.outputs.bundle_version }}"
+
+      - name: Build Go Cache Paths
+        id: go-cache-paths
+        run: |
+          echo "::set-output name=go-build::$(go env GOCACHE)"
+          echo "::set-output name=go-mod::$(go env GOMODCACHE)"
+
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v1
+        with:
+          go-version: ^1.16
+
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Go Build Cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.go-cache-paths.outputs.go-build }}
+          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
+
+      - name: Go Mod Cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.go-cache-paths.outputs.go-mod }}
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+
+      - name: Go Dependencies
+        run: go mod download
+
+      - name: Download Binaries
+        run: |
+          # Create Binary Directory
+          mkdir -p ${{ steps.set-variables.outputs.bin_dir }}
+
+          # Operator SDK
+          curl -L -o ${{ steps.set-variables.outputs.bin_dir }}/operator-sdk https://github.com/operator-framework/operator-sdk/releases/download/${OPERATOR_SDK_VERSION}/operator-sdk_linux_amd64
+
+          # Controller-gen
+          make controller-gen
+
+          # Kustomize
+          make kustomize
+
+      - name: Upload Support Binaries
+        uses: actions/upload-artifact@v2
+        with:
+          name: support-binaries
+          path: ${{ steps.set-variables.outputs.bin_dir }}
+    outputs:
+      repository_name: ${{ steps.set-variables.outputs.repository_name }}
+      bin_dir: ${{ steps.set-variables.outputs.bin_dir }}
+      operator_image_repository_name: ${{ steps.set-variables-image.outputs.operator_image_repository_name}}
+      operator_image_registry: ${{ steps.set-variables-image.outputs.operator_image_registry }}
+      bundle_image_repository_name: ${{ steps.set-variables-image.outputs.bundle_image_repository_name }}
+      bundle_image_registry: ${{ steps.set-variables-image.outputs.bundle_image_registry }}
+      go_build: ${{ steps.go-cache-paths.outputs.go-build }}
+      go_mod: ${{ steps.go-cache-paths.outputs.go-mod }}
+      operator_version: ${{ steps.set-variables-image.outputs.operator_version }}
+      bundle_version: ${{ steps.set-variables-image.outputs.bundle_version }}
+      tag_event: ${{ steps.set-variables-image.outputs.tag_event }}
+      dist_matrix: ${{ steps.set-variables.outputs.dist_matrix }}
+
+  operatorhub-release:
+    runs-on: ubuntu-latest
+    name: operatorhub-release
+    if: ${{ needs.setup.outputs.tag_event == 'true' }}
+    needs: ["setup"]
+    env:
+      REPOSITORY_NAME: ${{ needs.setup.outputs.repository_name }}
+      OPERATOR_VERSION: ${{ needs.setup.outputs.operator_version }}
+      COMMUNITY_OPERATORS_ORGANIZATION_NAME: redhat-openshift-ecosystem
+      COMMUNITY_OPERATORS_REPOSITORY_NAME: community-operators-prod
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Checkout Community Operators
+        uses: actions/checkout@v2
+        with:
+          repository: ${{ env.COMMUNITY_OPERATORS_ORGANIZATION_NAME }}/${{ env.COMMUNITY_OPERATORS_REPOSITORY_NAME }}
+          path: ./tmp/${{ env.COMMUNITY_OPERATORS_REPOSITORY_NAME }}
+
+      - name: Set Parameters
+        shell: bash
+        id: set-community-operators-parameters
+        run: |
+          if [ ! -d "./tmp/${{ env.COMMUNITY_OPERATORS_REPOSITORY_NAME }}/operators/${{ env.REPOSITORY_NAME }}" ]; then
+            echo "::set-output name=pull-request-body::$(cat config/community-operators/pr-first-release-body.txt)"
+          else
+            echo "::set-output name=pull-request-body::$(cat config/community-operators/pr-body.txt)"
+          fi
+
+      - name: Log
+        shell: bash
+        run: |
+          echo "Printing Pull Request Template"
+          cat ${{ steps.set-community-operators-parameters.pull-request-body }}
