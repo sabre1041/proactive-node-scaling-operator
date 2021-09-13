@@ -166,13 +166,18 @@ jobs:
         id: set-community-operators-parameters
         run: |
           if [ ! -d "./tmp/${{ env.COMMUNITY_OPERATORS_REPOSITORY_NAME }}/operators/${{ env.REPOSITORY_NAME }}" ]; then
-            echo COMMUNITY_OPERATORS_PR_CONTENT="$(cat config/community-operators/pr-first-release-body.txt)" >> $GITHUB_ENV
+            export PR_REQUEST_BODY="$(cat config/community-operators/pr-first-release-body.txt)"
           else
-            echo COMMUNITY_OPERATORS_PR_CONTENT="$(cat config/community-operators/pr-body.txt)" >> $GITHUB_ENV
+            export PR_REQUEST_BODY="$(cat config/community-operators/pr-body.txt)"
           fi
+
+          PR_REQUEST_BODY="${PR_REQUEST_BODY//'%'/'%25'}"
+          PR_REQUEST_BODY="${PR_REQUEST_BODY//$'\n'/'%0A'}"
+          PR_REQUEST_BODY="${PR_REQUEST_BODY//$'\r'/'%0D'}"
+          echo "::set-output name=pull-request-body::"$(PR_REQUEST_BODY)""
 
       - name: Log
         shell: bash
         run: |
           echo "Printing Pull Request Template"
-          cat ${{ env.COMMUNITY_OPERATORS_PR_CONTENT }}
+          cat ${{ steps.set-community-operators-parameters.outputs.pull-request-body }}
