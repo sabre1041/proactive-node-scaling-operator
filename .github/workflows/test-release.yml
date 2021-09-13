@@ -174,10 +174,10 @@ jobs:
           PR_REQUEST_BODY="${PR_REQUEST_BODY//'%'/'%25'}"
           PR_REQUEST_BODY="${PR_REQUEST_BODY//$'\n'/'%0A'}"
           PR_REQUEST_BODY="${PR_REQUEST_BODY//$'\r'/'%0D'}"
-          echo "::set-output name=pull-request-body::"$(echo PR_REQUEST_BODY)""
+          echo "::set-output name=pull-request-body::"$(echo $PR_REQUEST_BODY)""
 
       - name: Log
         shell: bash
         run: |
           echo "Printing Pull Request Template"
-          cat ${{ steps.set-community-operators-parameters.outputs.pull-request-body }}
+          echo ${{ steps.set-community-operators-parameters.outputs.pull-request-body }}
