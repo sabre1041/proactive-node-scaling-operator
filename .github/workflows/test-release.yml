@@ -166,9 +166,9 @@ jobs:
         id: set-community-operators-parameters
         run: |
           if [ ! -d "./tmp/${{ env.COMMUNITY_OPERATORS_REPOSITORY_NAME }}/operators/${{ env.REPOSITORY_NAME }}" ]; then
-            COMMUNITY_OPERATORS_PR_CONTENT="$(cat config/community-operators/pr-first-release-body.txt)" >> $GITHUB_ENV
+            echo COMMUNITY_OPERATORS_PR_CONTENT="$(cat config/community-operators/pr-first-release-body.txt)" >> $GITHUB_ENV
           else
-            COMMUNITY_OPERATORS_PR_CONTENT="$(cat config/community-operators/pr-body.txt)" >> $GITHUB_ENV
+            echo COMMUNITY_OPERATORS_PR_CONTENT="$(cat config/community-operators/pr-body.txt)" >> $GITHUB_ENV
           fi
 
       - name: Log
