@@ -256,7 +256,7 @@ jobs:
   build-bundle:
     runs-on: ubuntu-latest
     name: build-bundle
-    needs: ["setup"]
+    needs: ["setup", "build-operator"]
     env:
       REPOSITORY_NAME: ${{ needs.setup.outputs.repository_name }}
       OPERATOR_VERSION: ${{ needs.setup.outputs.operator_version }}
@@ -305,6 +305,16 @@ jobs:
         shell: bash
         run: make bundle IMG=${{ env.OPERATOR_IMAGE_REPOSITORY }}:${{ env.OPERATOR_VERSION }} VERSION=${{ env.BUNDLE_VERSION }} DEFAULT_CHANNEL=${{ env.DEFAULT_BUNDLE_CHANNEL }}
 
+      - name: Process Bundle for Disconnected Support
+        uses: redhat-cop/github-actions/disconnected-csv@master
+        with:
+          CSV_FILE: bundle/manifests/${{ env.REPOSITORY_NAME }}.clusterserviceversion.yaml
+          TAGS_TO_DIGESTS: ${OPERATOR_VERSION}
+
+      - name: "Copy bundle dockerfile"
+        shell: bash
+        run: sed  's/bundle\///g' bundle.Dockerfile > bundle/Dockerfile
+
       - name: verify bundle
         shell: bash
         run: operator-sdk bundle validate ./bundle --select-optional name=operatorhub
@@ -331,12 +341,6 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: "${{ env.BUNDLE_IMAGE_REPOSITORY }}:latest,${{ env.BUNDLE_IMAGE_REPOSITORY }}:${{ env.BUNDLE_VERSION }}"
-
-      - name: Process Bundle for Disconnected Support
-        uses: redhat-cop/github-actions/disconnected-csv@master
-        with:
-          CSV_FILE: bundle/manifests/${{ env.REPOSITORY_NAME }}.clusterserviceversion.yaml
-          TAGS_TO_DIGESTS: ${OPERATOR_VERSION}
 
       - name: Prepare Distribution Artifacts
         shell: bash
@@ -523,3 +527,29 @@ jobs:
 
       - name: Publish Helm Repository
         run: make helmchart-repo-push VERSION=${{ env.HELM_RELEASE_VERSION }} CHART_REPO_URL=https://${{ github.repository_owner }}.github.io/${{ env.REPOSITORY_NAME }} HELM_REPO_DEST=${{ env. HELM_REPO_DIR }}
+
+  operatorhub-release:
+    runs-on: ubuntu-latest
+    name: operatorhub-release
+    if: ${{ needs.setup.outputs.tag_event == 'true' }}
+    needs: ["setup", "github-release", "helm-release"]
+    env:
+      REPOSITORY_NAME: ${{ needs.setup.outputs.repository_name }}
+      OPERATOR_VERSION: ${{ needs.setup.outputs.operator_version }}
+    steps:
+      - name: Download Dist Directory
+        uses: actions/download-artifact@v2
+        with:
+          name: dist
+          path: dist
+
+      - name: Untar Previously Created Bundle
+        shell: bash
+        run: |
+          # Create Bundle Directory
+          mkdir bundle
+
+          # Untar
+          ls dist/${{ env.REPOSITORY_NAME }}-bundle*.tar.gz | xargs -n1 tar -C bundle/ --strip-components=1 -xzvf
+
+          ls bundle
