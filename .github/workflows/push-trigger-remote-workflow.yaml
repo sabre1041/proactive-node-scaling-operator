@@ -7,7 +7,7 @@ on:
 jobs:
   release-operator:
     name: release-operator
-    uses: sabre1041/github-workflows-operators/.github/workflows/release-operator.yml@evolution
+    uses: sabre1041/github-workflows-operators/.github/workflows/release-operator.yml@enhancements
     secrets:
       COMMUNITY_OPERATOR_PAT: ${{ secrets.COMMUNITY_OPERATOR_PAT }}
       BUNDLE_IMAGE_REPOSITORY: ${{ secrets.BUNDLE_IMAGE_REPOSITORY }}
