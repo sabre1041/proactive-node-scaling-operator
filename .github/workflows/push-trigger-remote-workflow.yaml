@@ -2,14 +2,14 @@ name: push-trigger-release-operator
 on:
   push:
     branches:
-      - enhancements
+      - generate-release-notes-remove
     tags:
       - v*
 
 jobs:
   release-operator:
     name: release-operator
-    uses: sabre1041/github-workflows-operators/.github/workflows/release-operator.yml@enhancements
+    uses: sabre1041/github-workflows-operators/.github/workflows/release-operator.yml@generate-release-notes-remove
     secrets:
       COMMUNITY_OPERATOR_PAT: ${{ secrets.COMMUNITY_OPERATOR_PAT }}
       BUNDLE_IMAGE_REPOSITORY: ${{ secrets.BUNDLE_IMAGE_REPOSITORY }}
